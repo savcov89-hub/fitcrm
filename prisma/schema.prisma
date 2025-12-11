@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  role      String
+  name      String
+  createdAt DateTime @default(now())
+  
+  isActive  Boolean  @default(false)
+  isTraining Boolean @default(false)
+
+  // --- НОВЫЕ ПОЛЯ ---
+  gender    String?  // 'male' или 'female'
+  birthDate DateTime? // Дата рождения
+  height    Float?    // Рост в см
+  // ------------------
+
+  measurements    Measurement[]
+  programs        Program[]
+  logs            WorkoutLog[]
+  plannedWorkouts PlannedWorkout[]
+}
+
+model Measurement {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  date      DateTime @default(now())
+  
+  weight    Float    
+  height    Float?   
+  neck      Float?   
+  waist     Float?   
+  hips      Float?   
+  bodyFat   Float?   
+  calories  Int?     
+}
+
+model Program {
+  id                Int      @id @default(autoincrement())
+  userId            Int
+  user              User     @relation(fields: [userId], references: [id])
+  name              String   
+  splitType         String   
+  periodizationType String   
+  exercises         String   
+}
+
+model WorkoutLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  date      DateTime @default(now())
+  details   String   
+  isDone    Boolean  @default(false)
+}
+
+model PlannedWorkout {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  
+  name      String   
+  order     Int      
+  exercises String   
+  
+  isDone    Boolean  @default(false)
+  date      DateTime?
+}
+
+// ... (остальной код выше не трогаем)
+
+// Таблица для твоих личных шаблонов
+model Template {
+  id        Int      @id @default(autoincrement())
+  name      String   // Название (например "Мой Жиросжигающий")
+  workouts  String   // Тут хранится весь список тренировок (JSON)
+  createdAt DateTime @default(now())
+}
+
+// ... (остальное выше)
+
+model Exercise {
+  id    Int    @id @default(autoincrement())
+  name  String @unique // Название должно быть уникальным
+}
