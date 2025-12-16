@@ -8,26 +8,33 @@ datasource db {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  password  String
-  role      String
-  name      String
-  createdAt DateTime @default(now())
+  id       Int     @id @default(autoincrement())
+  email    String  @unique
+  password String
+  name     String
+  role     String  @default("client")
+
+  // --- ВЕРНУЛ ПОТЕРЯННЫЕ ПОЛЯ (чтобы не было ошибки Data Loss) ---
+  birthDate DateTime?
+  height    Float?
+  gender    String?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  // -------------------------------------------------------------
   
-  isActive  Boolean  @default(false)
   isTraining Boolean @default(false)
 
-  // --- НОВЫЕ ПОЛЯ ---
-  gender    String?  // 'male' или 'female'
-  birthDate DateTime? // Дата рождения
-  height    Float?    // Рост в см
-  // ------------------
+  // --- НОВОЕ: Связь Тренер-Клиент ---
+  trainerId Int?
+  trainer   User?    @relation("TrainerToClients", fields: [trainerId], references: [id])
+  clients   User[]   @relation("TrainerToClients")
+  // ----------------------------------
 
-  measurements    Measurement[]
-  programs        Program[]
-  logs            WorkoutLog[]
-  plannedWorkouts PlannedWorkout[]
+  // Связи с другими таблицами
+  logs          WorkoutLog[]
+  plans         PlannedWorkout[]
+  measurements  Measurement[]
+  programs      Program[]
 }
 
 model Measurement {
@@ -37,10 +44,10 @@ model Measurement {
   date      DateTime @default(now())
   
   weight    Float    
-  height    Float?   
+  height    Float?
   neck      Float?   
   waist     Float?   
-  hips      Float?   
+  hips      Float?
   bodyFat   Float?   
   calories  Int?     
 }
@@ -77,19 +84,15 @@ model PlannedWorkout {
   date      DateTime?
 }
 
-// ... (остальной код выше не трогаем)
-
 // Таблица для твоих личных шаблонов
 model Template {
   id        Int      @id @default(autoincrement())
-  name      String   // Название (например "Мой Жиросжигающий")
-  workouts  String   // Тут хранится весь список тренировок (JSON)
+  name      String   
+  workouts  String   
   createdAt DateTime @default(now())
 }
 
-// ... (остальное выше)
-
 model Exercise {
   id    Int    @id @default(autoincrement())
-  name  String @unique // Название должно быть уникальным
+  name  String @unique 
 }

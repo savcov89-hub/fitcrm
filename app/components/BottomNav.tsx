@@ -41,18 +41,29 @@ export default function BottomNav() {
   }, []);
 
   if (pathname === '/') return null;
+  // Скрываем меню на странице регистрации
+  if (pathname === '/register') return null;
 
   let isTrainer = false;
   if (role) isTrainer = role === 'trainer';
   else isTrainer = pathname.startsWith('/trainer');
 
+  // --- МЕНЮ КЛИЕНТА ---
   if (!isTrainer) {
       const clientTabs = [
-        { name: 'Главная', icon: '🏠', path: '/client', isActive: (p: string) => p === '/client' },
-        { name: 'Тренировка', icon: '💪', path: '/trainer/active', isActive: (p: string) => p.startsWith('/client/workout') || p.startsWith('/trainer/active') },
+        // КНОПКА ГЛАВНАЯ УБРАНА. Теперь "Тренировка" - это главная.
+        { 
+            name: 'Тренировка', 
+            icon: '💪', 
+            path: '/client', 
+            // Горит синим, если мы на главной (/client) ИЛИ внутри тренировки (/client/workout...)
+            isActive: (p: string) => p === '/client' || p.startsWith('/client/workout') 
+        },
+        
         { name: 'Вес', icon: '⚖️', path: '/client/weight', isActive: (p: string) => p === '/client/weight' },
         { name: 'Замеры', icon: '📏', path: '/client/measurements', isActive: (p: string) => p === '/client/measurements' },
       ];
+      
       return (
         <div className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 pb-safe pt-2 px-4 z-50 h-20">
           <div className="flex justify-around items-start pt-2">
@@ -70,6 +81,7 @@ export default function BottomNav() {
       );
   }
 
+  // --- МЕНЮ ТРЕНЕРА ---
   const trainerTabs = [
     { name: 'Клиенты', icon: '👥', path: '/trainer', isActive: (p: string) => p === '/trainer' || p.startsWith('/trainer/client/') || p.startsWith('/trainer/workout/') },
     { name: 'Конструктор', icon: '📝', path: '/trainer/create-program', isActive: (p: string) => p === '/trainer/create-program' },
