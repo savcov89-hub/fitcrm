@@ -8,17 +8,15 @@ export default function ClientDashboard() {
   const [program, setProgram] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  // Функция загрузки данных (вынесли отдельно)
+  // Функция загрузки данных
   const fetchProgram = async (userId: number) => {
       try {
           const res = await fetch('/api/client/program', {
               method: 'POST',
               body: JSON.stringify({ userId }),
-              cache: 'no-store' // Важно: не кэшировать, брать свежее
+              cache: 'no-store'
           });
           const data = await res.json();
-          // Сравниваем: если данные изменились — обновляем
-          // (React сам оптимизирует и не будет перерисовывать, если объект тот же)
           setProgram(data);
       } catch (err) {
           console.error(err);
@@ -35,15 +33,14 @@ export default function ClientDashboard() {
     const userData = JSON.parse(userStr);
     setUser(userData);
 
-    // 2. Первая загрузка сразу
+    // 2. Первая загрузка
     fetchProgram(userData.id).then(() => setLoading(false));
 
-    // 3. АВТО-ОБНОВЛЕНИЕ КАЖДЫЕ 5 СЕКУНД (Polling)
+    // 3. Авто-обновление (Polling)
     const interval = setInterval(() => {
         fetchProgram(userData.id);
     }, 5000);
 
-    // Очистка таймера при уходе со страницы
     return () => clearInterval(interval);
   }, []);
 
@@ -53,7 +50,11 @@ export default function ClientDashboard() {
   };
 
   const startWorkout = () => {
-      router.push('/trainer/active'); 
+      // --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+      // Отправляем клиента в раздел /client, а не /trainer
+      if (program?.id) {
+        router.push(`/client/workout/${program.id}`);
+      }
   };
 
   if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Загрузка...</div>;
