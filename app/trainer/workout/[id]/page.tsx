@@ -146,11 +146,8 @@ export default function TrainerWorkoutPage() {
     <div className="min-h-screen bg-gray-900 text-white p-3 pb-40 relative">
       
       {/* --- СТИКИ ШАПКА --- */}
-      {/* -mx-3 раздвигает фон на всю ширину, компенсируя паддинг родителя */}
-      {/* sticky top-0 приклеивает к верху */}
       <div className="sticky top-0 z-20 bg-gray-900/95 backdrop-blur-md border-b border-gray-800 -mx-3 px-3 py-2 mb-4 shadow-xl">
          <div className="flex items-center justify-between gap-3">
-             {/* Левая часть: Кнопка назад и Аватар */}
              <div className="flex items-center gap-3 overflow-hidden">
                 <button 
                     onClick={() => router.back()} 
@@ -176,14 +173,12 @@ export default function TrainerWorkoutPage() {
                 </div>
              </div>
 
-             {/* Правая часть: Статус */}
              <div className="bg-gray-800 px-2 py-1 rounded border border-gray-700 shrink-0">
                 {getStatusIndicator()}
              </div>
          </div>
       </div>
 
-      {/* --- СПИСОК УПРАЖНЕНИЙ (СТИЛЬ КАК У КЛИЕНТА) --- */}
       <div className="space-y-2">
         {exercises.map((ex, i) => (
           <div key={i} className="bg-gray-800 p-3 rounded-xl border border-gray-700 shadow-sm">
@@ -194,7 +189,6 @@ export default function TrainerWorkoutPage() {
                 </div>
             </div>
 
-            {/* Ввод веса */}
             <div className="bg-gray-900/40 p-2 rounded-lg mb-2 flex items-center justify-between border border-gray-700/50 h-9">
                 <label className="text-[10px] text-gray-400 uppercase font-bold">Вес (кг):</label>
                 <input 
@@ -206,7 +200,6 @@ export default function TrainerWorkoutPage() {
                 />
             </div>
 
-            {/* Ввод повторов (Маленькие квадратики) */}
             <div className="grid grid-cols-5 gap-2">
                 {ex.actualReps.map((rep: any, setIdx: number) => (
                     <div key={setIdx} className="flex flex-col gap-0.5">
@@ -224,7 +217,8 @@ export default function TrainerWorkoutPage() {
         ))}
       </div>
 
-      <div className="fixed bottom-28 left-4 right-4 z-30">
+      {/* ИСПРАВЛЕНИЕ: КНОПКА ПОДНЯТА ВЫШЕ (bottom-40) */}
+      <div className="fixed bottom-40 left-4 right-4 z-30">
         <button onClick={finishAndClose} className="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-orange-900/20 active:scale-[0.98] transition border-t border-white/10">
             ✅ Завершить за клиента
         </button>
