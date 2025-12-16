@@ -8,6 +8,23 @@ export default function ClientDashboard() {
   const [program, setProgram] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
+  // Функция загрузки данных (вынесли отдельно)
+  const fetchProgram = async (userId: number) => {
+      try {
+          const res = await fetch('/api/client/program', {
+              method: 'POST',
+              body: JSON.stringify({ userId }),
+              cache: 'no-store' // Важно: не кэшировать, брать свежее
+          });
+          const data = await res.json();
+          // Сравниваем: если данные изменились — обновляем
+          // (React сам оптимизирует и не будет перерисовывать, если объект тот же)
+          setProgram(data);
+      } catch (err) {
+          console.error(err);
+      }
+  };
+
   useEffect(() => {
     // 1. Проверяем авторизацию
     const userStr = localStorage.getItem('user');
@@ -18,21 +35,16 @@ export default function ClientDashboard() {
     const userData = JSON.parse(userStr);
     setUser(userData);
 
-    // 2. Загружаем активную тренировку
-    fetch('/api/client/program', {
-        method: 'POST',
-        body: JSON.stringify({ userId: userData.id }),
-        cache: 'no-store'
-    })
-    .then(res => res.json())
-    .then(data => {
-        setProgram(data); // Если null - значит тренировок нет
-        setLoading(false);
-    })
-    .catch(err => {
-        console.error(err);
-        setLoading(false);
-    });
+    // 2. Первая загрузка сразу
+    fetchProgram(userData.id).then(() => setLoading(false));
+
+    // 3. АВТО-ОБНОВЛЕНИЕ КАЖДЫЕ 5 СЕКУНД (Polling)
+    const interval = setInterval(() => {
+        fetchProgram(userData.id);
+    }, 5000);
+
+    // Очистка таймера при уходе со страницы
+    return () => clearInterval(interval);
   }, []);
 
   const handleLogout = () => {
@@ -41,16 +53,13 @@ export default function ClientDashboard() {
   };
 
   const startWorkout = () => {
-      // Переходим на страницу выполнения
-      // Если файл лежит в trainer/active, его лучше перенести в client/active,
-      // но пока оставим ссылку, как было в твоем проекте:
       router.push('/trainer/active'); 
   };
 
   if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Загрузка...</div>;
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-4">
+    <div className="min-h-screen bg-gray-900 text-white p-4 pb-24">
       {/* Шапка */}
       <div className="flex justify-between items-center mb-8">
         <div>
@@ -65,7 +74,7 @@ export default function ClientDashboard() {
         
         {/* КАРТОЧКА АКТИВНОЙ ТРЕНИРОВКИ */}
         {program ? (
-            <div className="bg-gradient-to-br from-blue-600 to-blue-800 rounded-2xl p-6 shadow-xl border border-blue-500/30 relative overflow-hidden">
+            <div className="bg-gradient-to-br from-blue-600 to-blue-800 rounded-2xl p-6 shadow-xl border border-blue-500/30 relative overflow-hidden animate-in fade-in duration-500">
                 <div className="absolute top-0 right-0 p-4 opacity-10 text-6xl">💪</div>
                 <h2 className="text-white text-lg font-bold mb-1">{program.name}</h2>
                 <div className="text-blue-200 text-xs mb-6">Ваша следующая тренировка</div>
@@ -78,7 +87,7 @@ export default function ClientDashboard() {
                 </button>
             </div>
         ) : (
-            <div className="bg-gray-800 rounded-2xl p-8 text-center border border-gray-700 border-dashed">
+            <div className="bg-gray-800 rounded-2xl p-8 text-center border border-gray-700 border-dashed animate-in fade-in duration-500">
                 <div className="text-4xl mb-2">🎉</div>
                 <h3 className="text-lg font-bold text-gray-300">План выполнен!</h3>
                 <p className="text-sm text-gray-500 mt-2">На сегодня тренировок нет. Отдыхайте.</p>

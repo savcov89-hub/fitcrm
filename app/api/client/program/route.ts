@@ -2,79 +2,45 @@ import { NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
-export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
-    const { userId } = await request.json();
+    const body = await request.json();
+    const { userId } = body;
+
+    if (!userId) return NextResponse.json(null);
     const uid = parseInt(userId);
 
-    // 1. ИЩЕМ ТОЛЬКО В НОВОЙ ТАБЛИЦЕ (Очередь)
-    // Берем первую тренировку, которая еще НЕ выполнена (isDone: false)
-    // Сортируем по порядку (order: asc)
-    const nextWorkout = await prisma.plannedWorkout.findFirst({
-      where: { 
-          userId: uid,
-          isDone: false 
+    // 1. Ищем активную (невыполненную) тренировку
+    const activePlan = await prisma.plannedWorkout.findFirst({
+      where: {
+        userId: uid,
+        isDone: false
       },
-      orderBy: { order: 'asc' }, 
+      orderBy: { order: 'asc' } // Берем самую первую в списке
     });
 
-    // Если в плане пусто — возвращаем null (Клиент увидит "План выполнен")
-    // Старую таблицу Program мы ИГНОРИРУЕМ, поэтому "хуй2" исчезнет.
-    if (!nextWorkout) return NextResponse.json(null);
-
-    // 2. Достаем историю для подсказок (стандартная логика)
-    const history = await prisma.workoutLog.findMany({
-      where: { userId: uid },
-      orderBy: { date: 'desc' },
+    // 2. Ищем самого клиента, чтобы получить его ИМЯ
+    const user = await prisma.user.findUnique({
+        where: { id: uid },
+        select: { name: true } // Нам нужно только имя
     });
 
-    let currentExercises = [];
-    try {
-        currentExercises = JSON.parse(nextWorkout.exercises);
-    } catch(e) {
-        currentExercises = [];
+    // Если тренировки нет, но юзер есть - возвращаем хотя бы имя (чтобы шапка не была пустой)
+    if (!activePlan) {
+        return NextResponse.json({
+            clientName: user ? user.name : ''
+        });
     }
 
-    // 3. Прикрепляем историю к упражнениям
-    currentExercises = currentExercises.map((ex: any) => {
-      const relevantLogs = history.filter(log => {
-        try {
-            const details = JSON.parse(log.details);
-            return Array.isArray(details) && details.some((d: any) => d.name === ex.name);
-        } catch(e) { return false; }
-      }).slice(0, 5);
-
-      const historyList = relevantLogs.map(log => {
-        const details = JSON.parse(log.details);
-        const foundEx = details.find((e: any) => e.name === ex.name);
-        
-        let resStr = '';
-        if (foundEx.actualSets && foundEx.actualSets.length > 0) {
-          const w = foundEx.actualSets[0].weight || foundEx.workingWeight || 0;
-          const r = foundEx.actualSets.map((s: any) => s.reps).join(', ');
-          resStr = `${w}кг х ${r}`;
-        } else {
-          resStr = `${foundEx.doneWeight}кг х ${foundEx.doneReps}`;
-        }
-        
-        const date = new Date(log.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
-        return { date, result: resStr };
-      });
-
-      return { ...ex, historyList };
-    });
-
-    // Возвращаем данные для карточки и страницы тренировки
-    return NextResponse.json({ 
-        name: nextWorkout.name, 
-        plannedId: nextWorkout.id, // ID нужен, чтобы при завершении вычеркнуть её
-        exercises: JSON.stringify(currentExercises) 
+    // 3. Возвращаем данные тренировки + Имя клиента одной пачкой
+    return NextResponse.json({
+      ...activePlan,
+      clientName: user ? user.name : 'Неизвестный'
     });
 
   } catch (error) {
-    console.error("Ошибка API client/program:", error);
-    return NextResponse.json({ error: 'Ошибка сервера' }, { status: 500 });
+    console.error(error);
+    return NextResponse.json({ error: 'Error' }, { status: 500 });
   }
 }

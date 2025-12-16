@@ -6,33 +6,72 @@ const prisma = new PrismaClient();
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { userId, details, plannedId } = body; 
+    
+    // ИСПРАВЛЕНИЕ: Читаем 'details', а не 'exercises'
+    // Фронтенд отправляет { userId, details, plannedId }
+    const userId = body.userId || body.id; 
+    const { details, plannedId } = body; 
+    
     const uid = parseInt(userId);
 
-    // 1. Сохраняем в Историю (Log) - для статистики
-    const log = await prisma.workoutLog.create({
-        data: {
-          userId: uid,
-          details: JSON.stringify(details),
-          isDone: true
-        }
+    // --- НАЧАЛО: ЖЕЛЕЗНАЯ ПРОВЕРКА ДАТЫ ---
+    const now = new Date();
+    const todayString = now.toDateString(); 
+
+    console.log(`[DEBUG] Сохраняем для ID ${uid}. План ID: ${plannedId}`);
+
+    // 1. Ищем записи за последние дни
+    const recentLogs = await prisma.workoutLog.findMany({
+        where: { userId: uid },
+        orderBy: { date: 'desc' },
+        take: 20
     });
 
-    // 2. ОБНОВЛЯЕМ ПЛАН (PlannedWorkout)
-    // Мы не просто ставим isDone: true, но и перезаписываем 'exercises' 
-    // теми данными, которые ввел клиент (с реальными подходами).
-    if (plannedId) {
-        await prisma.plannedWorkout.update({
-            where: { id: parseInt(plannedId) },
+    // 2. Ищем запись за сегодня
+    const logToUpdate = recentLogs.find(log => {
+        return new Date(log.date).toDateString() === todayString;
+    });
+
+    // Подготовка данных (если details это объект, превращаем в строку)
+    const detailsString = typeof details === 'string' ? details : JSON.stringify(details);
+
+    if (logToUpdate) {
+        console.log(">>> НАШЛИ запись за сегодня! ОБНОВЛЯЕМ.");
+        await prisma.workoutLog.update({
+            where: { id: logToUpdate.id },
             data: { 
-                isDone: true,
-                exercises: JSON.stringify(details) // <--- ВАЖНО: Сохраняем факт в план
+                details: detailsString, // <--- Исправлено
+                date: new Date()
+            }
+        });
+    } else {
+        console.log(">>> Записи за сегодня нет. СОЗДАЕМ НОВУЮ.");
+        await prisma.workoutLog.create({
+            data: {
+                userId: uid,
+                details: detailsString, // <--- Исправлено
+                date: new Date()
             }
         });
     }
+    // --- КОНЕЦ ПРОВЕРКИ ---
 
-    return NextResponse.json({ success: true, log });
+    // 3. Закрываем тренировку в плане
+    if (plannedId) {
+        const pid = parseInt(plannedId);
+        const plan = await prisma.plannedWorkout.findUnique({ where: { id: pid }});
+        if (plan) {
+            await prisma.plannedWorkout.update({
+                where: { id: pid },
+                data: { isDone: true }
+            });
+        }
+    }
+
+    return NextResponse.json({ success: true });
+
   } catch (error) {
-    return NextResponse.json({ error: 'Ошибка сохранения' }, { status: 500 });
+    console.error("Ошибка сохранения лога:", error);
+    return NextResponse.json({ error: 'Ошибка сервера' }, { status: 500 });
   }
 }

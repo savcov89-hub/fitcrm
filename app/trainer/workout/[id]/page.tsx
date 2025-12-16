@@ -5,228 +5,230 @@ import { useRouter, useParams } from 'next/navigation';
 export default function TrainerWorkoutPage() {
   const router = useRouter();
   const params = useParams();
-  const clientId = params.id as string;
+  
+  const targetUserId = params?.id ? parseInt(params.id as string) : null;
 
   const [exercises, setExercises] = useState<any[]>([]);
-  const [clientName, setClientName] = useState('Клиент');
+  const [programName, setProgramName] = useState('');
+  const [clientName, setClientName] = useState('');
+  const [plannedId, setPlannedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
-  const [plannedId, setPlannedId] = useState<number | null>(null); // Храним ID плана, чтобы завершить его
-  
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'typing'>('saved');
+
+  const exercisesRef = useRef<any[]>([]);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const isFirstLoad = useRef(true);
+  const lastEditTimeRef = useRef<number>(0);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    if (!targetUserId) return;
 
-  // --- АВТОСОХРАНЕНИЕ ---
-  useEffect(() => {
-    if (loading || exercises.length === 0) return;
-    if (isFirstLoad.current) {
-        isFirstLoad.current = false;
-        return;
-    }
+    fetch('/api/client/status', {
+        method: 'POST',
+        body: JSON.stringify({ userId: targetUserId, isTraining: true })
+    });
 
-    setSaveStatus('saving');
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    loadData(targetUserId, false);
 
-    saveTimeoutRef.current = setTimeout(async () => {
-        saveToCloud();
-    }, 1500);
+    const interval = setInterval(() => {
+        loadData(targetUserId, true);
+    }, 3000);
 
-    return () => {
-        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    };
-  }, [exercises]);
+    return () => clearInterval(interval);
+  }, [targetUserId]);
 
-  const saveToCloud = async () => {
-    const logsToSend = exercises.map(ex => ({
-        name: ex.name,
-        sets: ex.sets,
-        reps: ex.reps,
-        actualSets: ex.actualReps.map((r: any) => ({
-            weight: ex.workingWeight, 
-            reps: r
-        }))
-    }));
+  useEffect(() => { exercisesRef.current = exercises; }, [exercises]);
 
-    try {
-        const res = await fetch('/api/client/log', {
-            method: 'POST',
-            body: JSON.stringify({ userId: clientId, details: logsToSend })
-        });
-        if (res.ok) {
-            setSaveStatus('saved');
-        } else {
-            setSaveStatus('error');
-        }
-    } catch (e) {
-        setSaveStatus('error');
-    }
+  const triggerAutoSave = (currentExercises: any[], pId: number | null) => {
+      if (!pId) return;
+      setSaveStatus('typing');
+      lastEditTimeRef.current = Date.now();
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+      saveTimeoutRef.current = setTimeout(async () => {
+          setSaveStatus('saving');
+          const cleanExercises = currentExercises.map(ex => ({
+              ...ex,
+              weight: ex.workingWeight,
+              reps: ex.reps,
+              actualReps: ex.actualReps 
+          }));
+          try {
+              await fetch('/api/client/save-progress', {
+                  method: 'POST',
+                  body: JSON.stringify({ plannedId: pId, exercises: cleanExercises })
+              });
+              setSaveStatus('saved');
+          } catch (e) { console.error(e); }
+      }, 1000); 
   };
 
-  // --- ЗАГРУЗКА ДАННЫХ (ИСПРАВЛЕННАЯ СИНХРОНИЗАЦИЯ) ---
-  const loadData = async () => {
-    // 1. Имя клиента
-    const clientsRes = await fetch('/api/trainer/clients', { cache: 'no-store' });
-    const clientsData = await clientsRes.json();
-    const currentClient = clientsData.find((c: any) => c.id == clientId);
-    if (currentClient) setClientName(currentClient.name);
+  const loadData = (uid: number, isPolling: boolean) => {
+    if (!isPolling) setLoading(true);
 
-    // 2. ВСЕГДА БЕРЕМ АКТУАЛЬНЫЙ ПЛАН (из очереди)
-    // (Игнорируем старую историю "за сегодня", чтобы не было путаницы)
-    const res = await fetch('/api/client/program', {
+    fetch('/api/client/program?t=' + new Date().getTime(), {
       method: 'POST',
-      body: JSON.stringify({ userId: clientId })
-    });
-    const data = await res.json();
+      body: JSON.stringify({ userId: uid }),
+      cache: 'no-store'
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data) {
+        if (data.clientName) setClientName(data.clientName);
 
-    if (data && data.exercises) {
-      setPlannedId(data.plannedId); // Запоминаем ID плана
-      
-      const parsed = JSON.parse(data.exercises);
-      const ready = parsed.map((ex: any) => {
-          const setsCount = parseInt(ex.sets) || 1;
-          const initialReps = Array(setsCount).fill(ex.reps);
-          return {
-            ...ex,
-            workingWeight: ex.weight || '',
-            actualReps: initialReps 
-          };
-      });
-      setExercises(ready);
-    } else {
-        setExercises([]); // Нет плана
-    }
-    
-    setLoading(false);
-    // Даем небольшую задержку перед включением автосейва, чтобы не сохранить данные сразу при загрузке
-    setTimeout(() => isFirstLoad.current = false, 500);
+        if (data.exercises) {
+            if (isPolling && (Date.now() - lastEditTimeRef.current < 4000)) return; 
+
+            setProgramName(data.name);
+            setPlannedId(data.plannedId);
+            
+            const serverExercises = typeof data.exercises === 'string' ? JSON.parse(data.exercises) : data.exercises;
+            
+            const ready = serverExercises.map((ex: any) => {
+              const setsCount = parseInt(ex.sets) || 1;
+              const initialReps = ex.actualReps && Array.isArray(ex.actualReps) ? ex.actualReps : Array(setsCount).fill(ex.reps);
+              return { ...ex, workingWeight: ex.weight || '', actualReps: initialReps };
+            });
+            
+            if (JSON.stringify(ready) !== JSON.stringify(exercisesRef.current)) setExercises(ready);
+        }
+      }
+      if (!isPolling) setLoading(false);
+    });
   };
 
   const updateReps = (exIndex: number, setIndex: number, value: string) => {
+    lastEditTimeRef.current = Date.now();
     const updated = [...exercises];
     updated[exIndex].actualReps[setIndex] = value;
     setExercises(updated);
+    triggerAutoSave(updated, plannedId);
   };
 
   const updateWeight = (exIndex: number, value: string) => {
+    lastEditTimeRef.current = Date.now();
     const updated = [...exercises];
     updated[exIndex].workingWeight = value;
+    updated[exIndex].weight = value; 
     setExercises(updated);
+    triggerAutoSave(updated, plannedId);
   };
 
-  // --- ЗАВЕРШЕНИЕ ТРЕНИРОВКИ ---
-  const finishWorkout = async () => {
-    if (!confirm(`Завершить тренировку для ${clientName}? Она исчезнет из плана.`)) return;
-
-    const logsToSend = exercises.map(ex => ({
+  const finishAndClose = async () => {
+      if (!confirm('Завершить тренировку за клиента?')) return;
+      const logsToSend = exercises.map(ex => ({
         name: ex.name,
         sets: ex.sets,
         reps: ex.reps,
-        actualSets: ex.actualReps.map((r: any) => ({
-            weight: ex.workingWeight, 
-            reps: r
-        }))
-    }));
+        actualSets: ex.actualReps.map((r: any) => ({ weight: ex.workingWeight, reps: r }))
+      }));
 
-    try {
       await fetch('/api/client/log', {
         method: 'POST',
-        body: JSON.stringify({ 
-            userId: clientId, 
-            details: logsToSend,
-            plannedId: plannedId // Отправляем ID, чтобы сервер вычеркнул тренировку
-        })
+        body: JSON.stringify({ userId: targetUserId, details: logsToSend, plannedId: plannedId })
       });
-      alert('Тренировка сохранена и закрыта!');
-      router.push(`/trainer/client/${clientId}`); // Возвращаемся в карточку
-    } catch (e) { alert('Ошибка'); }
+      
+      await fetch('/api/client/status', {
+          method: 'POST',
+          body: JSON.stringify({ userId: targetUserId, isTraining: false })
+      });
+      router.push('/trainer');
   };
 
-  if (loading) return <div className="p-10 text-white text-center text-sm">Загрузка...</div>;
+  const getStatusIndicator = () => {
+      if (saveStatus === 'typing') return <span className="text-[10px] text-blue-400 font-mono">✎...</span>;
+      if (saveStatus === 'saving') return <span className="text-[10px] text-yellow-400 font-mono animate-pulse">● Сохр...</span>;
+      return <span className="text-[10px] text-green-500 font-mono">● OK</span>;
+  };
+
+  if (loading) return <div className="min-h-screen bg-gray-900 text-white p-10 text-center">Загрузка...</div>;
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-3 pb-32">
+    <div className="min-h-screen bg-gray-900 text-white p-3 pb-40 relative">
       
-      {/* Шапка */}
-      <div className="flex justify-between items-center mb-4 sticky top-0 bg-gray-900 z-20 py-2 border-b border-gray-800">
-          <button 
-            onClick={() => router.push(`/trainer/client/${clientId}`)} // Возврат в карточку
-            className="text-gray-400 text-sm flex items-center hover:text-white transition"
-          >
-             ← Назад к клиенту
-          </button>
-          
-          <div className="text-xs font-bold flex items-center gap-2">
-            {saveStatus === 'saved' && <span className="text-green-500 flex items-center gap-1">☁️ Сохранено</span>}
-            {saveStatus === 'saving' && <span className="text-yellow-500 flex items-center gap-1">⏳ Сохраняю...</span>}
-            {saveStatus === 'error' && <span className="text-red-500">⚠️ Ошибка</span>}
-          </div>
+      {/* --- СТИКИ ШАПКА --- */}
+      {/* -mx-3 раздвигает фон на всю ширину, компенсируя паддинг родителя */}
+      {/* sticky top-0 приклеивает к верху */}
+      <div className="sticky top-0 z-20 bg-gray-900/95 backdrop-blur-md border-b border-gray-800 -mx-3 px-3 py-2 mb-4 shadow-xl">
+         <div className="flex items-center justify-between gap-3">
+             {/* Левая часть: Кнопка назад и Аватар */}
+             <div className="flex items-center gap-3 overflow-hidden">
+                <button 
+                    onClick={() => router.back()} 
+                    className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-800 text-gray-400 hover:text-white border border-gray-700 active:scale-95 transition shrink-0"
+                >
+                    ←
+                </button>
+                
+                <div className="flex items-center gap-2 overflow-hidden">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center shadow-lg shrink-0 border border-white/10">
+                        <span className="font-bold text-xs text-white">
+                            {clientName ? clientName[0].toUpperCase() : '?'}
+                        </span>
+                    </div>
+                    <div className="flex flex-col truncate">
+                        <span className="text-[9px] text-blue-400 font-bold uppercase tracking-wider leading-none mb-0.5 truncate">
+                            {clientName || 'Клиент'}
+                        </span>
+                        <span className="text-xs font-bold text-white leading-none truncate">
+                            {programName}
+                        </span>
+                    </div>
+                </div>
+             </div>
+
+             {/* Правая часть: Статус */}
+             <div className="bg-gray-800 px-2 py-1 rounded border border-gray-700 shrink-0">
+                {getStatusIndicator()}
+             </div>
+         </div>
       </div>
 
-      <h1 className="text-lg font-bold text-orange-500 leading-none mb-4">{clientName}</h1>
-
-      {exercises.length === 0 ? (
-          <div className="text-center text-gray-500 mt-10">
-              Нет активной тренировки в плане.
-              <br/>
-              Назначьте программу в карточке клиента.
-          </div>
-      ) : (
-          <div className="space-y-3">
-            {exercises.map((ex, i) => (
-              <div key={i} className="bg-gray-800 p-3 rounded-xl border border-gray-700 shadow-sm">
-                
-                <div className="flex justify-between items-start mb-2">
+      {/* --- СПИСОК УПРАЖНЕНИЙ (СТИЛЬ КАК У КЛИЕНТА) --- */}
+      <div className="space-y-2">
+        {exercises.map((ex, i) => (
+          <div key={i} className="bg-gray-800 p-3 rounded-xl border border-gray-700 shadow-sm">
+            <div className="mb-2">
+                <div className="flex justify-between items-start mb-1">
                     <h3 className="font-bold text-sm text-gray-200 leading-tight w-3/4">{ex.name}</h3>
-                    <span className="text-[10px] font-bold text-blue-400 bg-blue-900/20 px-1.5 py-0.5 rounded">
-                        {ex.sets} x {ex.reps}
-                    </span>
+                    <span className="text-[10px] font-bold text-blue-400 bg-blue-900/20 px-1.5 py-0.5 rounded border border-blue-500/20">{ex.sets} x {ex.reps}</span>
                 </div>
+            </div>
 
-                <div className="bg-gray-900/40 p-2 rounded-lg mb-2 flex items-center justify-between border border-gray-700/50 h-10">
-                    <label className="text-xs text-gray-400">Вес (кг):</label>
-                    <input 
-                        type="number" 
-                        className="bg-transparent w-20 text-right text-lg font-bold text-white focus:outline-none placeholder-gray-600"
-                        value={ex.workingWeight}
-                        onChange={(e) => updateWeight(i, e.target.value)}
-                        placeholder="0"
-                    />
-                </div>
+            {/* Ввод веса */}
+            <div className="bg-gray-900/40 p-2 rounded-lg mb-2 flex items-center justify-between border border-gray-700/50 h-9">
+                <label className="text-[10px] text-gray-400 uppercase font-bold">Вес (кг):</label>
+                <input 
+                    type="number" 
+                    className="bg-transparent w-16 text-right text-base font-bold text-white focus:outline-none placeholder-gray-600" 
+                    value={ex.workingWeight} 
+                    onChange={(e) => updateWeight(i, e.target.value)} 
+                    placeholder="0" 
+                />
+            </div>
 
-                <div className="grid grid-cols-5 gap-2"> 
-                    {ex.actualReps.map((rep: any, setIdx: number) => (
-                        <div key={setIdx} className="flex flex-col gap-0.5">
-                            <span className="text-[9px] text-center text-gray-600">#{setIdx + 1}</span>
-                            <input 
-                                type="number" 
-                                className="bg-gray-700 w-full h-8 p-0 rounded-md text-center text-sm font-bold text-white focus:ring-1 focus:ring-green-500 outline-none"
-                                value={rep}
-                                onChange={(e) => updateReps(i, setIdx, e.target.value)}
-                            />
-                        </div>
-                    ))}
-                </div>
-
-              </div>
-            ))}
+            {/* Ввод повторов (Маленькие квадратики) */}
+            <div className="grid grid-cols-5 gap-2">
+                {ex.actualReps.map((rep: any, setIdx: number) => (
+                    <div key={setIdx} className="flex flex-col gap-0.5">
+                        <input 
+                            type="number" 
+                            className="bg-gray-700 w-full h-8 p-0 rounded-md text-center text-sm font-bold text-white border border-gray-600 focus:border-green-500 outline-none transition-colors" 
+                            value={rep} 
+                            onChange={(e) => updateReps(i, setIdx, e.target.value)} 
+                            placeholder="-" 
+                        />
+                    </div>
+                ))}
+            </div>
           </div>
-      )}
+        ))}
+      </div>
 
-      {exercises.length > 0 && (
-          <div className="fixed bottom-20 left-3 right-3 z-40">
-            <button 
-                onClick={finishWorkout} 
-                className="w-full bg-orange-600 hover:bg-orange-500 text-white font-bold py-3 rounded-xl shadow-lg shadow-black/50 text-sm transition active:scale-[0.98]"
-            >
-                ✅ Завершить и закрыть
-            </button>
-          </div>
-      )}
-      
+      <div className="fixed bottom-28 left-4 right-4 z-30">
+        <button onClick={finishAndClose} className="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-orange-900/20 active:scale-[0.98] transition border-t border-white/10">
+            ✅ Завершить за клиента
+        </button>
+      </div>
     </div>
   );
 }

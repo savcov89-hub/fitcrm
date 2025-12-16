@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
 export default function WorkoutPage() {
@@ -8,19 +8,72 @@ export default function WorkoutPage() {
   const [programName, setProgramName] = useState('');
   const [plannedId, setPlannedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState('client'); // По умолчанию клиент
+  const [userRole, setUserRole] = useState('client');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const exercisesRef = useRef<any[]>([]);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const userStr = localStorage.getItem('user');
     if (!userStr) return router.push('/');
     const user = JSON.parse(userStr);
     
-    // Запоминаем роль, чтобы знать, куда возвращать
     setUserRole(user.role);
+
+    // 1. ВКЛЮЧАЕМ СТАТУС "В ЗАЛЕ"
+    fetch('/api/client/status', {
+        method: 'POST',
+        body: JSON.stringify({ userId: user.id, isTraining: true })
+    });
+
+    loadData(user.id, false);
+
+    const interval = setInterval(() => {
+        loadData(user.id, true);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => { exercisesRef.current = exercises; }, [exercises]);
+
+  const triggerAutoSave = (currentExercises: any[], pId: number | null) => {
+      if (!pId) return;
+      
+      setIsSaving(true);
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+      saveTimeoutRef.current = setTimeout(async () => {
+          const cleanExercises = currentExercises.map(ex => ({
+              ...ex,
+              weight: ex.workingWeight,
+              reps: ex.reps, 
+              actualReps: ex.actualReps 
+          }));
+
+          try {
+              await fetch('/api/client/save-progress', {
+                  method: 'POST',
+                  body: JSON.stringify({ 
+                      plannedId: pId, 
+                      exercises: cleanExercises 
+                  })
+              });
+          } catch (e) {
+              console.error("Ошибка сохранения черновика", e);
+          } finally {
+              setIsSaving(false);
+          }
+      }, 1000); 
+  };
+
+  const loadData = (userId: number, isPolling: boolean) => {
+    if (!isPolling) setLoading(true);
 
     fetch('/api/client/program?t=' + new Date().getTime(), {
       method: 'POST',
-      body: JSON.stringify({ userId: user.id }),
+      body: JSON.stringify({ userId: userId }),
       cache: 'no-store'
     })
     .then(res => res.json())
@@ -29,41 +82,60 @@ export default function WorkoutPage() {
         setProgramName(data.name);
         setPlannedId(data.plannedId);
         
-        const parsed = JSON.parse(data.exercises);
-        const ready = parsed.map((ex: any) => {
+        const serverExercises = typeof data.exercises === 'string' 
+            ? JSON.parse(data.exercises) 
+            : data.exercises;
+
+        if (isPolling && isSaving) return;
+
+        const ready = serverExercises.map((ex: any) => {
           const setsCount = parseInt(ex.sets) || 1;
-          const initialReps = Array(setsCount).fill(ex.reps);
+          const initialReps = ex.actualReps && Array.isArray(ex.actualReps) 
+              ? ex.actualReps 
+              : Array(setsCount).fill(ex.reps);
+
           return {
             ...ex,
             workingWeight: ex.weight || '',
             actualReps: initialReps 
           };
         });
-        setExercises(ready);
-      }
-      setLoading(false);
-    });
-  }, []);
+        
+        if (JSON.stringify(ready) !== JSON.stringify(exercisesRef.current)) {
+             setExercises(ready);
+        }
 
-  // УМНАЯ ФУНКЦИЯ ВОЗВРАТА
-  const goBack = () => {
-      if (userRole === 'trainer') {
-          router.push('/trainer');
       } else {
-          router.push('/client');
+          if (!isPolling) {
+              setProgramName('');
+              setExercises([]);
+          }
       }
+      if (!isPolling) setLoading(false);
+    })
+    .catch(() => {
+        if (!isPolling) setLoading(false);
+    });
+  };
+
+  const goBack = () => {
+      if (userRole === 'trainer') router.push('/trainer');
+      else router.push('/client');
   };
 
   const updateReps = (exIndex: number, setIndex: number, value: string) => {
     const updated = [...exercises];
     updated[exIndex].actualReps[setIndex] = value;
     setExercises(updated);
+    triggerAutoSave(updated, plannedId); 
   };
 
   const updateWeight = (exIndex: number, value: string) => {
     const updated = [...exercises];
     updated[exIndex].workingWeight = value;
+    updated[exIndex].weight = value; 
     setExercises(updated);
+    triggerAutoSave(updated, plannedId); 
   };
 
   const finishWorkout = async () => {
@@ -84,30 +156,27 @@ export default function WorkoutPage() {
     }));
 
     try {
-      // 1. Сохраняем лог
       await fetch('/api/client/log', {
         method: 'POST',
         body: JSON.stringify({ 
             userId: user.id, 
-            details: logsToSend,
+            details: logsToSend, 
             plannedId: plannedId 
         })
       });
       
-      // 2. ВЫКЛЮЧАЕМ ЛАМПОЧКУ (isTraining = false)
       await fetch('/api/client/status', {
           method: 'POST',
           body: JSON.stringify({ userId: user.id, isTraining: false })
       });
 
       alert('Тренировка завершена! 💪');
-      goBack(); // Используем умный возврат
+      goBack(); 
     } catch (e) { alert('Ошибка'); }
   };
 
   if (loading) return <div className="min-h-screen bg-gray-900 text-white p-10 text-center text-sm">Загрузка...</div>;
   
-  // Если программы нет (например, зашел тренер)
   if (!programName) return (
       <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center text-white p-4">
           <p className="mb-4 text-gray-400">Нет активной программы для вашего аккаунта.</p>
@@ -120,8 +189,13 @@ export default function WorkoutPage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-3 pb-32">
       <div className="flex justify-between items-start mb-4 border-b border-gray-800 pb-2">
-          <div><div className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">Тренировка</div><h1 className="text-lg font-bold text-white leading-tight pr-4">{programName}</h1></div>
-          {/* Кнопка Закрыть тоже использует умный возврат */}
+          <div>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">Тренировка</div>
+            <div className="flex items-center gap-2">
+                <h1 className="text-lg font-bold text-white leading-tight pr-2">{programName}</h1>
+                {isSaving && <span className="text-[10px] text-yellow-400 animate-pulse">Сохранение...</span>}
+            </div>
+          </div>
           <button onClick={goBack} className="text-gray-400 hover:text-white bg-gray-800 px-2 py-1 rounded text-xs whitespace-nowrap">✕ Закрыть</button>
       </div>
       <div className="space-y-2">
