@@ -1,0 +1,78 @@
+'use client';
+import { useEffect, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+
+export default function TrainerMenu() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const [activeClients, setActiveClients] = useState<any[]>([]);
+
+  // Запрос активных клиентов ТОЛЬКО здесь
+  const fetchActiveClients = async () => {
+      try {
+          const res = await fetch('/api/trainer/active-clients');
+          if (res.ok) {
+              const data = await res.json();
+              if (Array.isArray(data)) setActiveClients(data);
+          }
+      } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => {
+      fetchActiveClients();
+      const interval = setInterval(fetchActiveClients, 5000);
+      return () => clearInterval(interval);
+  }, []);
+
+  const tabs = [
+    { name: 'Клиенты', icon: '👥', path: '/trainer', isActive: (p: string) => p === '/trainer' || p.startsWith('/trainer/client/') || p.startsWith('/trainer/workout/') },
+    { name: 'Конструктор', icon: '📝', path: '/trainer/create-program', isActive: (p: string) => p === '/trainer/create-program' },
+    { name: 'История', icon: '📈', path: '/trainer/history', isActive: (p: string) => p === '/trainer/history' },
+  ];
+
+  return (
+    <>
+      {/* Плашка "В зале" */}
+      {activeClients.length > 0 && (
+          <div className="fixed bottom-20 left-0 right-0 z-40 px-2 pb-2 pointer-events-none">
+              <div className="flex justify-center">
+                  <div className="bg-gray-800/90 backdrop-blur-md border border-gray-700 rounded-2xl p-2 shadow-2xl pointer-events-auto flex gap-3 items-center overflow-x-auto max-w-full">
+                      <span className="text-[10px] text-green-400 font-bold uppercase whitespace-nowrap px-1 animate-pulse">● В зале:</span>
+                      {activeClients.map(client => (
+                          <button 
+                            key={client.id}
+                            onClick={() => router.push(`/trainer/workout/${client.id}`)}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition ${pathname.includes(`/workout/${client.id}`) ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'}`}
+                          >
+                              <div className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-[8px] font-bold text-white">
+                                  {client.name[0]}
+                              </div>
+                              <span className="text-xs font-bold truncate max-w-[80px]">{client.name}</span>
+                          </button>
+                      ))}
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Само меню */}
+      <div className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 pb-safe pt-2 px-4 z-50 h-20">
+        <div className="flex justify-around items-start pt-2">
+          {tabs.map((tab) => {
+            const active = tab.isActive(pathname);
+            return (
+              <button
+                key={tab.path}
+                onClick={() => router.push(tab.path)}
+                className={`flex flex-col items-center justify-center w-full space-y-1 transition-colors ${active ? 'text-blue-500' : 'text-gray-500 hover:text-gray-300'}`}
+              >
+                <span className={`text-2xl ${active ? 'scale-110' : ''} transition-transform`}>{tab.icon}</span>
+                <span className="text-[10px] font-medium">{tab.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
