@@ -4,18 +4,21 @@ import { useRouter, useParams } from 'next/navigation';
 
 export default function ClientWorkoutPage() {
   const router = useRouter();
-  const params = useParams(); // Получаем ID из адреса (на будущее)
+  // const params = useParams(); // Оставляем, если понадобится ID из URL
   const [exercises, setExercises] = useState<any[]>([]);
   const [programName, setProgramName] = useState('');
   const [plannedId, setPlannedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [userRole, setUserRole] = useState('client');
   const [isSaving, setIsSaving] = useState(false);
 
+  // Ссылки для доступа к актуальным данным внутри таймеров
   const exercisesRef = useRef<any[]>([]);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // ГЛАВНОЕ ИСПРАВЛЕНИЕ: Флаг "Грязных данных" (несохраненных изменений)
+  const isDirtyRef = useRef(false);
 
-  // --- ЛОГИКА ЗАГРУЗКИ ---
   useEffect(() => {
     const userStr = localStorage.getItem('user');
     if (!userStr) return router.push('/');
@@ -23,16 +26,16 @@ export default function ClientWorkoutPage() {
     
     setUserRole(user.role);
 
-    // 1. Сообщаем серверу: "Я В ЗАЛЕ" (чтобы тренер видел)
+    // 1. Статус "В зале"
     fetch('/api/client/status', {
         method: 'POST',
         body: JSON.stringify({ userId: user.id, isTraining: true })
     });
 
-    // 2. Загружаем программу
+    // 2. Первая загрузка
     loadData(user.id, false);
 
-    // 3. Авто-обновление (чтобы видеть изменения от тренера на лету)
+    // 3. Авто-обновление (Polling)
     const interval = setInterval(() => {
         loadData(user.id, true);
     }, 3000);
@@ -40,13 +43,18 @@ export default function ClientWorkoutPage() {
     return () => clearInterval(interval);
   }, []);
 
+  // Синхронизируем реф с стейтом, чтобы логика сохранения видела актуальные данные
   useEffect(() => { exercisesRef.current = exercises; }, [exercises]);
 
-  // --- АВТОСОХРАНЕНИЕ ---
+  // --- ЛОГИКА АВТОСОХРАНЕНИЯ ---
   const triggerAutoSave = (currentExercises: any[], pId: number | null) => {
       if (!pId) return;
       
+      // 1. Ставим метку: "Есть несохраненные данные!"
+      // Это запретит loadData перезаписывать твои цифры
+      isDirtyRef.current = true;
       setIsSaving(true);
+      
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
       saveTimeoutRef.current = setTimeout(async () => {
@@ -66,15 +74,22 @@ export default function ClientWorkoutPage() {
                   })
               });
           } catch (e) {
-              console.error("Ошибка сохранения черновика", e);
+              console.error("Ошибка сохранения", e);
           } finally {
+              // 2. Сохранение прошло — снимаем метку
+              isDirtyRef.current = false; 
               setIsSaving(false);
           }
-      }, 1000); 
+      }, 1000); // Ждем 1 секунду после ввода перед отправкой
   };
 
   const loadData = (userId: number, isPolling: boolean) => {
     if (!isPolling) setLoading(true);
+
+    // ВАЖНО: Если данные "грязные" (мы печатаем), пропускаем обновление с сервера
+    if (isPolling && isDirtyRef.current) {
+        return;
+    }
 
     fetch('/api/client/program?t=' + new Date().getTime(), {
       method: 'POST',
@@ -83,6 +98,9 @@ export default function ClientWorkoutPage() {
     })
     .then(res => res.json())
     .then(data => {
+      // Двойная проверка: если пока шел запрос, мы начали печатать — отменяем обновление
+      if (isPolling && isDirtyRef.current) return;
+
       if (data && data.exercises) {
         setProgramName(data.name);
         setPlannedId(data.plannedId);
@@ -91,14 +109,12 @@ export default function ClientWorkoutPage() {
             ? JSON.parse(data.exercises) 
             : data.exercises;
 
-        // Если мы сейчас редактируем (сохраняем), не обновляем данные с сервера, чтобы курсор не скакал
-        if (isPolling && isSaving) return;
-
         const ready = serverExercises.map((ex: any) => {
           const setsCount = parseInt(ex.sets) || 1;
+          // Если на сервере пусто, создаем массив пустот, иначе берем массив с сервера
           const initialReps = ex.actualReps && Array.isArray(ex.actualReps) 
               ? ex.actualReps 
-              : Array(setsCount).fill(ex.reps);
+              : Array(setsCount).fill(''); // Пустые строки вместо undefined
 
           return {
             ...ex,
@@ -107,6 +123,7 @@ export default function ClientWorkoutPage() {
           };
         });
         
+        // Обновляем только если данные реально отличаются
         if (JSON.stringify(ready) !== JSON.stringify(exercisesRef.current)) {
              setExercises(ready);
         }
@@ -125,27 +142,37 @@ export default function ClientWorkoutPage() {
   };
 
   const goBack = () => {
-      // Возвращаемся всегда в кабинет клиента
       router.push('/client');
   };
 
   const updateReps = (exIndex: number, setIndex: number, value: string) => {
+    // Немедленно блокируем обновления с сервера
+    isDirtyRef.current = true;
+    
     const updated = [...exercises];
+    // Копируем вглубь, чтобы React увидел изменения
+    updated[exIndex] = { ...updated[exIndex], actualReps: [...updated[exIndex].actualReps] };
     updated[exIndex].actualReps[setIndex] = value;
+    
     setExercises(updated);
     triggerAutoSave(updated, plannedId); 
   };
 
   const updateWeight = (exIndex: number, value: string) => {
+    isDirtyRef.current = true;
+
     const updated = [...exercises];
-    updated[exIndex].workingWeight = value;
-    updated[exIndex].weight = value; 
+    updated[exIndex] = { ...updated[exIndex], workingWeight: value };
+    
     setExercises(updated);
     triggerAutoSave(updated, plannedId); 
   };
 
   const finishWorkout = async () => {
     if (!confirm('Завершить тренировку?')) return;
+
+    // Ждем сохранения, если оно идет
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
     const userStr = localStorage.getItem('user');
     if (!userStr) return;
@@ -162,7 +189,6 @@ export default function ClientWorkoutPage() {
     }));
 
     try {
-      // 1. Сохраняем результат в историю
       await fetch('/api/client/log', {
         method: 'POST',
         body: JSON.stringify({ 
@@ -172,7 +198,6 @@ export default function ClientWorkoutPage() {
         })
       });
       
-      // 2. Убираем статус "В зале"
       await fetch('/api/client/status', {
           method: 'POST',
           body: JSON.stringify({ userId: user.id, isTraining: false })
@@ -196,7 +221,6 @@ export default function ClientWorkoutPage() {
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-3 pb-32">
-      {/* Шапка тренировки */}
       <div className="flex justify-between items-start mb-4 border-b border-gray-800 pb-2">
           <div>
             <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">Сейчас идет тренировка</div>
@@ -208,7 +232,6 @@ export default function ClientWorkoutPage() {
           <button onClick={goBack} className="text-gray-400 hover:text-white bg-gray-800 px-3 py-2 rounded-lg text-xs whitespace-nowrap">✕ Закрыть</button>
       </div>
 
-      {/* Список упражнений */}
       <div className="space-y-2">
         {exercises.map((ex, i) => (
           <div key={i} className="bg-gray-800 p-3 rounded-xl border border-gray-700 shadow-sm">
@@ -231,13 +254,27 @@ export default function ClientWorkoutPage() {
             
             <div className="bg-gray-900/40 p-2 rounded-lg mb-2 flex items-center justify-between border border-gray-700/50 h-9">
                 <label className="text-[10px] text-gray-400 uppercase font-bold">Вес (кг):</label>
-                <input type="number" className="bg-transparent w-16 text-right text-base font-bold text-white focus:outline-none" value={ex.workingWeight} onChange={(e) => updateWeight(i, e.target.value)} placeholder="0" />
+                <input 
+                    type="number" 
+                    className="bg-transparent w-16 text-right text-base font-bold text-white focus:outline-none" 
+                    value={ex.workingWeight} 
+                    onChange={(e) => updateWeight(i, e.target.value)} 
+                    placeholder="0" 
+                />
             </div>
             
             <div className="grid grid-cols-5 gap-2">
                 {ex.actualReps.map((rep: any, setIdx: number) => (
                     <div key={setIdx} className="flex flex-col gap-0.5">
-                        <input type="number" className="bg-gray-700 w-full h-8 p-0 rounded-md text-center text-sm font-bold text-white border border-gray-600 focus:border-green-500 outline-none" value={rep} onChange={(e) => updateReps(i, setIdx, e.target.value)} placeholder="-" />
+                        <input 
+                            type="number" 
+                            className={`w-full h-8 p-0 rounded-md text-center text-sm font-bold border outline-none transition-colors ${
+                                rep ? 'bg-green-900/30 border-green-500/50 text-white' : 'bg-gray-700 border-gray-600 text-gray-400'
+                            }`}
+                            value={rep} 
+                            onChange={(e) => updateReps(i, setIdx, e.target.value)} 
+                            placeholder="-" 
+                        />
                     </div>
                 ))}
             </div>
@@ -245,7 +282,6 @@ export default function ClientWorkoutPage() {
         ))}
       </div>
 
-      {/* Кнопка завершения */}
       <div className="fixed bottom-20 left-3 right-3 z-40">
         <button onClick={finishWorkout} className="w-full bg-gradient-to-r from-green-600 to-green-500 text-white font-bold py-3 rounded-xl shadow-lg transition active:scale-[0.98]">✅ Завершить тренировку</button>
       </div>
