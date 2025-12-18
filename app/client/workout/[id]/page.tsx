@@ -1,10 +1,9 @@
 'use client';
 import { useEffect, useState, useRef } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 
 export default function ClientWorkoutPage() {
   const router = useRouter();
-  // const params = useParams(); // Оставляем, если понадобится ID из URL
   const [exercises, setExercises] = useState<any[]>([]);
   const [programName, setProgramName] = useState('');
   const [plannedId, setPlannedId] = useState<number | null>(null);
@@ -13,10 +12,8 @@ export default function ClientWorkoutPage() {
   const [userRole, setUserRole] = useState('client');
   const [isSaving, setIsSaving] = useState(false);
 
-  // Ссылки для доступа к актуальным данным внутри таймеров
   const exercisesRef = useRef<any[]>([]);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  // ГЛАВНОЕ ИСПРАВЛЕНИЕ: Флаг "Грязных данных" (несохраненных изменений)
   const isDirtyRef = useRef(false);
 
   useEffect(() => {
@@ -26,16 +23,13 @@ export default function ClientWorkoutPage() {
     
     setUserRole(user.role);
 
-    // 1. Статус "В зале"
     fetch('/api/client/status', {
         method: 'POST',
         body: JSON.stringify({ userId: user.id, isTraining: true })
     });
 
-    // 2. Первая загрузка
     loadData(user.id, false);
 
-    // 3. Авто-обновление (Polling)
     const interval = setInterval(() => {
         loadData(user.id, true);
     }, 3000);
@@ -43,15 +37,11 @@ export default function ClientWorkoutPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Синхронизируем реф с стейтом, чтобы логика сохранения видела актуальные данные
   useEffect(() => { exercisesRef.current = exercises; }, [exercises]);
 
-  // --- ЛОГИКА АВТОСОХРАНЕНИЯ ---
   const triggerAutoSave = (currentExercises: any[], pId: number | null) => {
       if (!pId) return;
       
-      // 1. Ставим метку: "Есть несохраненные данные!"
-      // Это запретит loadData перезаписывать твои цифры
       isDirtyRef.current = true;
       setIsSaving(true);
       
@@ -76,17 +66,15 @@ export default function ClientWorkoutPage() {
           } catch (e) {
               console.error("Ошибка сохранения", e);
           } finally {
-              // 2. Сохранение прошло — снимаем метку
               isDirtyRef.current = false; 
               setIsSaving(false);
           }
-      }, 1000); // Ждем 1 секунду после ввода перед отправкой
+      }, 1000);
   };
 
   const loadData = (userId: number, isPolling: boolean) => {
     if (!isPolling) setLoading(true);
 
-    // ВАЖНО: Если данные "грязные" (мы печатаем), пропускаем обновление с сервера
     if (isPolling && isDirtyRef.current) {
         return;
     }
@@ -98,7 +86,6 @@ export default function ClientWorkoutPage() {
     })
     .then(res => res.json())
     .then(data => {
-      // Двойная проверка: если пока шел запрос, мы начали печатать — отменяем обновление
       if (isPolling && isDirtyRef.current) return;
 
       if (data && data.exercises) {
@@ -111,10 +98,9 @@ export default function ClientWorkoutPage() {
 
         const ready = serverExercises.map((ex: any) => {
           const setsCount = parseInt(ex.sets) || 1;
-          // Если на сервере пусто, создаем массив пустот, иначе берем массив с сервера
           const initialReps = ex.actualReps && Array.isArray(ex.actualReps) 
               ? ex.actualReps 
-              : Array(setsCount).fill(''); // Пустые строки вместо undefined
+              : Array(setsCount).fill(''); 
 
           return {
             ...ex,
@@ -123,7 +109,6 @@ export default function ClientWorkoutPage() {
           };
         });
         
-        // Обновляем только если данные реально отличаются
         if (JSON.stringify(ready) !== JSON.stringify(exercisesRef.current)) {
              setExercises(ready);
         }
@@ -145,24 +130,37 @@ export default function ClientWorkoutPage() {
       router.push('/client');
   };
 
+  // --- ОБНОВЛЕННАЯ ФУНКЦИЯ ДЛЯ ПОВТОРОВ (Только целые числа) ---
   const updateReps = (exIndex: number, setIndex: number, value: string) => {
-    // Немедленно блокируем обновления с сервера
     isDirtyRef.current = true;
     
+    // Фильтр: оставляем только цифры (удаляем все буквы, точки и знаки)
+    const validValue = value.replace(/[^0-9]/g, '');
+
     const updated = [...exercises];
-    // Копируем вглубь, чтобы React увидел изменения
     updated[exIndex] = { ...updated[exIndex], actualReps: [...updated[exIndex].actualReps] };
-    updated[exIndex].actualReps[setIndex] = value;
+    updated[exIndex].actualReps[setIndex] = validValue;
     
     setExercises(updated);
     triggerAutoSave(updated, plannedId); 
   };
 
+  // --- ОБНОВЛЕННАЯ ФУНКЦИЯ ДЛЯ ВЕСА (Цифры и точка) ---
   const updateWeight = (exIndex: number, value: string) => {
     isDirtyRef.current = true;
 
+    // Фильтр: оставляем цифры и одну точку (для веса 12.5)
+    // Если пользователь вводит запятую, меняем её на точку
+    let validValue = value.replace(/,/g, '.').replace(/[^0-9.]/g, '');
+    
+    // Защита от двух точек (например 12..5)
+    const dots = validValue.split('.');
+    if (dots.length > 2) {
+        validValue = dots[0] + '.' + dots.slice(1).join('');
+    }
+
     const updated = [...exercises];
-    updated[exIndex] = { ...updated[exIndex], workingWeight: value };
+    updated[exIndex] = { ...updated[exIndex], workingWeight: validValue };
     
     setExercises(updated);
     triggerAutoSave(updated, plannedId); 
@@ -170,8 +168,6 @@ export default function ClientWorkoutPage() {
 
   const finishWorkout = async () => {
     if (!confirm('Завершить тренировку?')) return;
-
-    // Ждем сохранения, если оно идет
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
     const userStr = localStorage.getItem('user');
@@ -255,7 +251,9 @@ export default function ClientWorkoutPage() {
             <div className="bg-gray-900/40 p-2 rounded-lg mb-2 flex items-center justify-between border border-gray-700/50 h-9">
                 <label className="text-[10px] text-gray-400 uppercase font-bold">Вес (кг):</label>
                 <input 
-                    type="number" 
+                    type="text" 
+                    inputMode="decimal" 
+                    pattern="[0-9]*" 
                     className="bg-transparent w-16 text-right text-base font-bold text-white focus:outline-none" 
                     value={ex.workingWeight} 
                     onChange={(e) => updateWeight(i, e.target.value)} 
@@ -267,7 +265,9 @@ export default function ClientWorkoutPage() {
                 {ex.actualReps.map((rep: any, setIdx: number) => (
                     <div key={setIdx} className="flex flex-col gap-0.5">
                         <input 
-                            type="number" 
+                            type="text"
+                            inputMode="numeric" 
+                            pattern="[0-9]*" 
                             className={`w-full h-8 p-0 rounded-md text-center text-sm font-bold border outline-none transition-colors ${
                                 rep ? 'bg-green-900/30 border-green-500/50 text-white' : 'bg-gray-700 border-gray-600 text-gray-400'
                             }`}
